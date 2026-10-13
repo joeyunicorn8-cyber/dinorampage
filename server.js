@@ -19,11 +19,32 @@ const server = http.createServer((req, res) => {
   res.end('Dino Rampage server running');
 });
 
-const wss = new WebSocketServer({ server, maxPayload: 4096 });
+const wss = new WebSocketServer({ server, maxPayload: 32768 });
 
 let nextId = 1;
 const players = new Map(); // id -> player
 const chatLog = [];
+const worldSeed = Math.floor(Math.random() * 2147483646) + 1;
+let hostId = null;
+
+// Event kinds clients may relay to each other, and who may send them.
+const HOST_ONLY_KINDS = new Set(['dsnap', 'wsnap', 'dmg', 'dkill', 'tamed', 'mountdead']);
+const ALLOWED_KINDS = new Set([
+  'dsnap', 'wsnap', 'reqsnap', 'dhit', 'feed', 'mount', 'dismount', 'stay', 'ride',
+  'dmg', 'dkill', 'tamed', 'mountdead', 'mdmg', 'thit', 'sgc', 'lplace', 'lhit'
+]);
+const EVENT_RATE_LIMIT = 120; // events per second per player
+
+function electHost() {
+  let best = null;
+  for (const p of players.values()) {
+    if (p.inArena && (best === null || p.id < best)) best = p.id;
+  }
+  if (best !== hostId) {
+    hostId = best;
+    broadcast({ t: 'host', id: hostId });
+  }
+}
 
 function clean(str, max) {
   return String(str == null ? '' : str).replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, max);
@@ -72,7 +93,9 @@ wss.on('connection', (ws) => {
     x: 0, y: 0, z: 10, yaw: 0, pitch: 0,
     moving: false,
     mount: null,
-    lastChat: 0
+    lastChat: 0,
+    evWindowStart: 0,
+    evCount: 0
   };
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
@@ -90,7 +113,7 @@ wss.on('connection', (ws) => {
       player.skin = clean(msg.skin, 20) || 'ranger';
       player.joined = true;
       players.set(player.id, player);
-      send(ws, { t: 'welcome', id: player.id, players: lobbyList(), chat: chatLog });
+      send(ws, { t: 'welcome', id: player.id, players: lobbyList(), chat: chatLog, seed: worldSeed, host: hostId });
       broadcast({ t: 'join', player: publicInfo(player) }, player.id);
       return;
     }
@@ -109,6 +132,25 @@ wss.on('connection', (ws) => {
     } else if (msg.t === 'scene') {
       player.inArena = !!msg.inArena;
       broadcast({ t: 'update', player: publicInfo(player) });
+      electHost();
+    } else if (msg.t === 'ev') {
+      if (typeof msg.k !== 'string' || !ALLOWED_KINDS.has(msg.k)) return;
+      if (HOST_ONLY_KINDS.has(msg.k) && player.id !== hostId) return;
+      const now = Date.now();
+      if (now - player.evWindowStart > 1000) { player.evWindowStart = now; player.evCount = 0; }
+      if (++player.evCount > EVENT_RATE_LIMIT) return;
+      const out = JSON.stringify({ t: 'ev', from: player.id, k: msg.k, d: msg.d });
+      if (msg.to === 'host') {
+        const h = players.get(hostId);
+        if (h && h !== player && h.ws.readyState === 1) h.ws.send(out);
+      } else if (typeof msg.to === 'number') {
+        const target = players.get(msg.to);
+        if (target && target.ws.readyState === 1) target.ws.send(out);
+      } else {
+        for (const p of players.values()) {
+          if (p !== player && p.inArena && p.ws.readyState === 1) p.ws.send(out);
+        }
+      }
     } else if (msg.t === 'skin') {
       player.skin = clean(msg.skin, 20) || player.skin;
       broadcast({ t: 'update', player: publicInfo(player) });
@@ -129,6 +171,7 @@ wss.on('connection', (ws) => {
   ws.on('close', () => {
     if (player.joined && players.delete(player.id)) {
       broadcast({ t: 'leave', id: player.id });
+      electHost();
     }
   });
 
