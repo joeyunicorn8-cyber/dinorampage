@@ -35,11 +35,20 @@ const ALLOWED_KINDS = new Set([
 ]);
 const EVENT_RATE_LIMIT = 120; // events per second per player
 
+// The host's browser runs the dino simulation, and browsers freeze hidden or
+// covered windows — so prefer a visible arena player, and keep the current
+// host while it stays visible (no flip-flopping).
 function electHost() {
-  let best = null;
+  const current = players.get(hostId);
+  if (current && current.inArena && current.visible) return;
+  let bestVisible = null;
+  let bestAny = null;
   for (const p of players.values()) {
-    if (p.inArena && (best === null || p.id < best)) best = p.id;
+    if (!p.inArena) continue;
+    if (bestAny === null || p.id < bestAny) bestAny = p.id;
+    if (p.visible && (bestVisible === null || p.id < bestVisible)) bestVisible = p.id;
   }
+  let best = bestVisible !== null ? bestVisible : (current && current.inArena ? hostId : bestAny);
   if (best !== hostId) {
     hostId = best;
     broadcast({ t: 'host', id: hostId });
@@ -95,7 +104,8 @@ wss.on('connection', (ws) => {
     mount: null,
     lastChat: 0,
     evWindowStart: 0,
-    evCount: 0
+    evCount: 0,
+    visible: true
   };
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
@@ -132,6 +142,9 @@ wss.on('connection', (ws) => {
     } else if (msg.t === 'scene') {
       player.inArena = !!msg.inArena;
       broadcast({ t: 'update', player: publicInfo(player) });
+      electHost();
+    } else if (msg.t === 'vis') {
+      player.visible = !!msg.visible;
       electHost();
     } else if (msg.t === 'ev') {
       if (typeof msg.k !== 'string' || !ALLOWED_KINDS.has(msg.k)) return;
