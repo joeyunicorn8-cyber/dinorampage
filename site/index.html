@@ -1819,7 +1819,7 @@
               <li><strong>Right-click</strong> — context-sensitive: eat held food, place logs, feed a tameable dino, or mount a tamed one</li>
               <li><strong>Shift + Right-click</strong> — tell a tamed dino to stay (click again to have it follow you)</li>
               <li><strong>Shift</strong> (alone) — dismount whatever you're riding</li>
-              <li><strong>Scroll wheel</strong> — cycle through your hotbar</li>
+              <li><strong>Scroll wheel</strong> or the <strong>number keys 1-9</strong> — choose a hotbar item (the keys can be changed in Settings)</li>
               <li><strong>G</strong> — open the shop when you're near the hut</li>
               <li><strong>Esc</strong> — release your cursor; also opens a mouse sensitivity slider</li>
             </ul>
@@ -1952,7 +1952,7 @@
           <div><strong>CLICK</strong> &nbsp;— Punch / chop / equip armour</div>
           <div><strong>RIGHT-CLICK</strong> &nbsp;— Eat / place / feed / ride</div>
           <div><strong>SHIFT + RIGHT-CLICK</strong> &nbsp;— Toggle stay/follow</div>
-          <div><strong>SCROLL</strong> &nbsp;— Switch hotbar item</div>
+          <div><strong>SCROLL / <span class="hint-key-slots">1-9</span></strong> &nbsp;— Switch hotbar item</div>
           <div><strong class="hint-key-dismount">SHIFT</strong> &nbsp;— Dismount</div>
           <div><strong class="hint-key-shop">G</strong> &nbsp;— Enter shop (near the hut)</div>
           <div><strong>ESC</strong> &nbsp;— Release cursor</div>
@@ -2942,9 +2942,12 @@
       { id: 'right', label: 'Move Right' },
       { id: 'jump', label: 'Jump' },
       { id: 'dismount', label: 'Dismount' },
-      { id: 'shop', label: 'Open Shop' }
+      { id: 'shop', label: 'Open Shop' },
+      ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => ({ id: 'slot' + n, label: 'Hotbar Slot ' + n }))
     ];
-    const DEFAULT_KEYBINDS = { forward: 'KeyW', left: 'KeyA', back: 'KeyS', right: 'KeyD', jump: 'Space', dismount: 'ShiftLeft', shop: 'KeyG' };
+    const DEFAULT_KEYBINDS = { forward: 'KeyW', left: 'KeyA', back: 'KeyS', right: 'KeyD', jump: 'Space', dismount: 'ShiftLeft', shop: 'KeyG',
+      slot1: 'Digit1', slot2: 'Digit2', slot3: 'Digit3', slot4: 'Digit4', slot5: 'Digit5',
+      slot6: 'Digit6', slot7: 'Digit7', slot8: 'Digit8', slot9: 'Digit9' };
 
     let gameSettings = loadGameSettings();
     gameSettings.keys = Object.assign({}, DEFAULT_KEYBINDS, gameSettings.keys || {});
@@ -3030,6 +3033,9 @@
       set('hint-key-jump', keyLabel(k.jump));
       set('hint-key-dismount', keyLabel(k.dismount));
       set('hint-key-shop', keyLabel(k.shop));
+      const slotCodes = [1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => k['slot' + n]);
+      const defaultSlots = slotCodes.every((c, i) => c === 'Digit' + (i + 1));
+      set('hint-key-slots', defaultSlots ? '1-9' : slotCodes.map(keyLabel).join(' '));
     }
 
     function saveGameSettings() {
@@ -6620,6 +6626,8 @@
         case 'dismount':
           if (ridingDino) dismountDino();
           break;
+        default:
+          if (action && action.startsWith('slot')) selectHotbarSlot(Number(action.slice(4)) - 1);
       }
     }
 
