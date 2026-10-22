@@ -33,8 +33,10 @@ let hostId = null;
 const HOST_ONLY_KINDS = new Set(['dsnap', 'wsnap', 'dmg', 'dkill', 'tamed', 'mountdead']);
 const ALLOWED_KINDS = new Set([
   'dsnap', 'wsnap', 'reqsnap', 'dhit', 'feed', 'mount', 'dismount', 'stay', 'ride',
-  'dmg', 'dkill', 'tamed', 'mountdead', 'mdmg', 'thit', 'sgc', 'lplace', 'lhit', 'phit'
+  'dmg', 'dkill', 'tamed', 'mountdead', 'mdmg', 'thit', 'sgc', 'lplace', 'lhit', 'phit', 'pkill'
 ]);
+const PVP_KILL_WINDOW_MS = 6000;
+const PVP_KILL_PAIR_COOLDOWN_MS = 15000; // caps how fast the same two players can trade kills
 const PVP_RANGE = 8;
 const PVP_MIN_INTERVAL_MS = 250;
 
@@ -42,6 +44,7 @@ const PVP_MIN_INTERVAL_MS = 250;
 // Kept in memory and saved to a file when possible (free hosts may reset the file).
 const REGISTRY_FILE = path.join(__dirname, 'registry.json');
 const registry = new Map();
+const killCooldowns = new Map();
 try {
   JSON.parse(fs.readFileSync(REGISTRY_FILE, 'utf8')).forEach((e) => registry.set(e.name.toLowerCase(), e));
 } catch (e) { /* no saved registry yet */ }
@@ -128,7 +131,8 @@ wss.on('connection', (ws) => {
     evWindowStart: 0,
     evCount: 0,
     visible: true,
-    lastHit: 0
+    lastHit: 0,
+    lastPvp: null
   };
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
@@ -181,6 +185,17 @@ wss.on('connection', (ws) => {
         if (Math.hypot(victim.x - player.x, victim.z - player.z) > PVP_RANGE) return;
         if (now - player.lastHit < PVP_MIN_INTERVAL_MS) return;
         player.lastHit = now;
+        player.lastPvp = { victim: victim.id, time: now };
+      }
+      if (msg.k === 'pkill') {
+        // A kill reward only goes to a player who really hit this victim moments ago.
+        const killer = typeof msg.to === 'number' ? players.get(msg.to) : null;
+        if (!killer || !killer.lastPvp || killer.lastPvp.victim !== player.id) return;
+        if (now - killer.lastPvp.time > PVP_KILL_WINDOW_MS) return;
+        const pairKey = killer.id + ':' + player.id;
+        if (now - (killCooldowns.get(pairKey) || 0) < PVP_KILL_PAIR_COOLDOWN_MS) return;
+        killCooldowns.set(pairKey, now);
+        killer.lastPvp = null;
       }
       if (now - player.evWindowStart > 1000) { player.evWindowStart = now; player.evCount = 0; }
       if (++player.evCount > EVENT_RATE_LIMIT) return;

@@ -850,6 +850,49 @@
       cursor: pointer;
     }
 
+    .keybind-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      color: #9fd4a8;
+      font-size: 13px;
+      padding: 4px 0;
+    }
+
+    .keybind-btn {
+      min-width: 96px;
+      padding: 6px 12px;
+      background: #142016;
+      border: 1px solid #234828;
+      border-radius: 8px;
+      color: #baffc9;
+      font-weight: 800;
+      font-size: 12px;
+      letter-spacing: 0.5px;
+      cursor: pointer;
+    }
+
+    .keybind-btn:hover { border-color: #39ff14; }
+
+    .keybind-btn.listening {
+      border-color: #ffd23f;
+      color: #ffd23f;
+      animation: bubbleBob 0.9s ease-in-out infinite;
+    }
+
+    .keybind-reset {
+      margin-top: 8px;
+      background: transparent;
+      border: 1px solid #2a5a34;
+      border-radius: 20px;
+      color: #6fdc7a;
+      font-size: 11px;
+      padding: 5px 14px;
+      cursor: pointer;
+    }
+
+    .keybind-reset:hover { border-color: #39ff14; color: #baffc9; }
+
     .settings-hint {
       color: #4fae5c;
       font-size: 11px;
@@ -1742,6 +1785,12 @@
               <div class="settings-hint">Debug wireframes around dinosaurs and world objects</div>
             </div>
             <div class="settings-row">
+              <label>Key Bindings</label>
+              <div id="keybind-list"></div>
+              <button type="button" class="keybind-reset" onclick="resetKeybinds()">Reset to defaults</button>
+              <div class="settings-hint">Click a button, then press the key you want. Press Esc to cancel.</div>
+            </div>
+            <div class="settings-row">
               <div class="settings-toggle-row">
                 <span>Sound Effects</span>
                 <input type="checkbox" class="sound-toggle-input" id="sound-toggle" checked onchange="setSoundEnabled(this.checked)" />
@@ -1882,7 +1931,7 @@
     <div class="log-toast" id="log-toast"></div>
     <div class="threat-alert" id="threat-alert"></div>
     <div class="damage-flash" id="damage-flash"></div>
-    <div class="shop-prompt" id="shop-prompt">Press <strong>G</strong> to enter the shop</div>
+    <div class="shop-prompt" id="shop-prompt">Press <strong class="hint-key-shop">G</strong> to enter the shop</div>
     <div class="shop-overlay hidden" id="shop-overlay">
       <div class="shop-box">
         <h2>🔮 Mystic Trader</h2>
@@ -1897,15 +1946,15 @@
         <h2>🦖 Enter the Rampage</h2>
         <p>Click anywhere to look around</p>
         <div class="arena-controls">
-          <div><strong>W A S D</strong> &nbsp;— Move</div>
-          <div><strong>SPACE</strong> &nbsp;— Jump</div>
+          <div><strong class="hint-key-move">W A S D</strong> &nbsp;— Move</div>
+          <div><strong class="hint-key-jump">SPACE</strong> &nbsp;— Jump</div>
           <div><strong>MOUSE</strong> &nbsp;— Look around freely</div>
           <div><strong>CLICK</strong> &nbsp;— Punch / chop / equip armour</div>
           <div><strong>RIGHT-CLICK</strong> &nbsp;— Eat / place / feed / ride</div>
           <div><strong>SHIFT + RIGHT-CLICK</strong> &nbsp;— Toggle stay/follow</div>
           <div><strong>SCROLL</strong> &nbsp;— Switch hotbar item</div>
-          <div><strong>SHIFT</strong> &nbsp;— Dismount</div>
-          <div><strong>G</strong> &nbsp;— Enter shop (near the hut)</div>
+          <div><strong class="hint-key-dismount">SHIFT</strong> &nbsp;— Dismount</div>
+          <div><strong class="hint-key-shop">G</strong> &nbsp;— Enter shop (near the hut)</div>
           <div><strong>ESC</strong> &nbsp;— Release cursor</div>
         </div>
         <div class="sensitivity-row" onclick="event.stopPropagation()">
@@ -2699,6 +2748,12 @@
         damagePlayer(Number(d.amt) || 1, attacker);
       } else if (k === 'phit') {
         onPlayerHit(from, d);
+      } else if (k === 'pkill') {
+        meatCount += PVP_KILL_MEAT;
+        unlockHotbarItem('meat');
+        updateFoodUI();
+        const victim = mpPlayers.get(from);
+        showPickupToast(`🍖 +${PVP_KILL_MEAT} Meat — you defeated ${victim ? victim.name : 'a player'}!`, playTameSound);
       } else if (k === 'dkill') {
         awardFoodDrop(d.ty);
       } else if (k === 'tamed') {
@@ -2810,7 +2865,9 @@
         }
         if (mesh.userData.hitFlash > 0) {
           mesh.userData.hitFlash = Math.max(0, mesh.userData.hitFlash - dt * 3);
-          mesh.userData.flashMats.forEach((m) => m.emissive.setRGB(mesh.userData.hitFlash, 0, 0));
+          const f = mesh.userData.hitFlash;
+          const green = mesh.userData.flashCrit ? f * 0.75 : 0;
+          mesh.userData.flashMats.forEach((m) => m.emissive.setRGB(f, green, 0));
         }
         const k = Math.min(dt * 10, 1);
         mesh.position.x += (t.x - mesh.position.x) * k;
@@ -2878,7 +2935,102 @@
       }
     }
 
+    const KEYBIND_ACTIONS = [
+      { id: 'forward', label: 'Move Forward' },
+      { id: 'left', label: 'Move Left' },
+      { id: 'back', label: 'Move Back' },
+      { id: 'right', label: 'Move Right' },
+      { id: 'jump', label: 'Jump' },
+      { id: 'dismount', label: 'Dismount' },
+      { id: 'shop', label: 'Open Shop' }
+    ];
+    const DEFAULT_KEYBINDS = { forward: 'KeyW', left: 'KeyA', back: 'KeyS', right: 'KeyD', jump: 'Space', dismount: 'ShiftLeft', shop: 'KeyG' };
+
     let gameSettings = loadGameSettings();
+    gameSettings.keys = Object.assign({}, DEFAULT_KEYBINDS, gameSettings.keys || {});
+
+    function normalizeKeyCode(code) {
+      return code.replace(/^(Shift|Control|Alt)(Left|Right)$/, '$1Left');
+    }
+
+    function keyLabel(code) {
+      if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+      if (/^Digit\d$/.test(code)) return code.slice(5);
+      const names = {
+        Space: 'SPACE', ShiftLeft: 'SHIFT', ShiftRight: 'SHIFT', ControlLeft: 'CTRL', ControlRight: 'CTRL',
+        AltLeft: 'ALT', AltRight: 'ALT', ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→',
+        Backquote: '`', Minus: '-', Equal: '=', BracketLeft: '[', BracketRight: ']', Semicolon: ';',
+        Quote: "'", Comma: ',', Period: '.', Slash: '/', Backslash: '\\', Tab: 'TAB', Enter: 'ENTER'
+      };
+      return names[code] || code.toUpperCase();
+    }
+
+    function bindActionForCode(code) {
+      const norm = normalizeKeyCode(code);
+      for (let i = 0; i < KEYBIND_ACTIONS.length; i++) {
+        const id = KEYBIND_ACTIONS[i].id;
+        if (normalizeKeyCode(gameSettings.keys[id]) === norm) return id;
+      }
+      return null;
+    }
+
+    let rebindingAction = null;
+
+    function renderKeybinds() {
+      const list = document.getElementById('keybind-list');
+      if (!list) return;
+      list.innerHTML = KEYBIND_ACTIONS.map((a) => `
+        <div class="keybind-row">
+          <span>${a.label}</span>
+          <button type="button" class="keybind-btn${rebindingAction === a.id ? ' listening' : ''}" onclick="startRebind('${a.id}')">${rebindingAction === a.id ? 'Press a key…' : keyLabel(gameSettings.keys[a.id])}</button>
+        </div>
+      `).join('');
+      updateKeyHints();
+    }
+
+    function startRebind(actionId) {
+      rebindingAction = rebindingAction === actionId ? null : actionId;
+      renderKeybinds();
+    }
+
+    function resetKeybinds() {
+      gameSettings.keys = Object.assign({}, DEFAULT_KEYBINDS);
+      rebindingAction = null;
+      saveGameSettings();
+      renderKeybinds();
+    }
+
+    // Runs before the game's own key handlers so the key pressed while
+    // rebinding is captured instead of acting in-game.
+    window.addEventListener('keydown', (e) => {
+      if (!rebindingAction) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.code === 'Escape') {
+        rebindingAction = null;
+        renderKeybinds();
+        return;
+      }
+      const code = e.code;
+      const other = bindActionForCode(code);
+      if (other && other !== rebindingAction) {
+        gameSettings.keys[other] = gameSettings.keys[rebindingAction];
+      }
+      gameSettings.keys[rebindingAction] = code;
+      arenaKeys.w = arenaKeys.a = arenaKeys.s = arenaKeys.d = false;
+      rebindingAction = null;
+      saveGameSettings();
+      renderKeybinds();
+    }, true);
+
+    function updateKeyHints() {
+      const k = gameSettings.keys;
+      const set = (cls, text) => document.querySelectorAll('.' + cls).forEach((el) => { el.textContent = text; });
+      set('hint-key-move', [k.forward, k.left, k.back, k.right].map(keyLabel).join(' '));
+      set('hint-key-jump', keyLabel(k.jump));
+      set('hint-key-dismount', keyLabel(k.dismount));
+      set('hint-key-shop', keyLabel(k.shop));
+    }
 
     function saveGameSettings() {
       try {
@@ -3002,6 +3154,12 @@
       playNoiseBurst(0.09, 0.16, 350, 'lowpass');
       playTone(85, 0.16, 'sine', 0.26);
     }
+    function playCritSound() {
+      playNoiseBurst(0.1, 0.26, 3400, 'highpass');
+      playTone(1900, 0.07, 'sawtooth', 0.11);
+      playTone(2600, 0.09, 'square', 0.08, 0.04);
+      playTone(110, 0.14, 'sine', 0.2, 0.02);
+    }
     function playDamageSound() { playTone(110, 0.18, 'sawtooth', 0.16); }
     function playEatSound() { playTone(320, 0.09, 'triangle', 0.12); }
     function playPickupSound() {
@@ -3034,6 +3192,14 @@
     const BIG_MOUNT_FOG_FAR = 340;
     const ATTACK_RANGE = 4;
     const ATTACK_HIT_FORGIVENESS = 0.35;
+    const CRIT_CHANCE = 0.15;
+    const CRIT_MULT = 2;
+    const KNOCKBACK_SPEED = 9;
+    const KNOCKBACK_CRIT_SPEED = 15;
+    const PVP_KILL_MEAT = 8;
+    let knockVX = 0;
+    let knockVZ = 0;
+    let pvpKillCredit = null;
     const LOG_PILE_HIT_HEALTH = 3;
     const ATTACK_ANGLE = 0.65;
     const TURN_FACE_THRESHOLD = 0.35;
@@ -5747,8 +5913,9 @@
       });
     }
 
-    function damagePlayer(amount, attacker) {
+    function damagePlayer(amount, attacker, isPvp) {
       if (playerInvuln > 0) return;
+      if (!isPvp) pvpKillCredit = null;
       amount *= 1 - getArmorReduction();
       playerHealth = Math.max(0, playerHealth - amount);
       playerInvuln = 0.8;
@@ -5775,7 +5942,10 @@
 
       if (ridingDino && ridingDino.userData.type === 'sauropod') sauropodTailSwing(attacker);
 
-      if (playerHealth <= 0) respawnPlayer();
+      if (playerHealth <= 0) {
+        creditPvpKill();
+        respawnPlayer();
+      }
     }
 
     function respawnPlayer() {
@@ -6167,34 +6337,67 @@
       triggerArmPunch();
 
       const { target, kind } = findAttackTarget();
-      if (kind === 'dino') { hitDino(target); playHitSound(); }
+      if (kind === 'dino') {
+        const hit = rollCrit(heldDamage());
+        hitDino(target, hit.dmg);
+        playHitSound();
+        if (hit.crit) showCritFeedback();
+      }
       else if (kind === 'tree') { hitTree(target); playTreeThumpSound(); }
       else if (kind === 'seagrass') hitSeagrass(target);
       else if (kind === 'logpile') hitLogPile(target);
       else if (kind === 'player') hitPlayer(target);
     }
 
+    function heldDamage() {
+      return (playerHasSword && getSelectedHotbarItem() === 'sword') ? 2 : 1;
+    }
+
+    function rollCrit(base) {
+      const crit = Math.random() < CRIT_CHANCE;
+      return { dmg: crit ? base * CRIT_MULT : base, crit };
+    }
+
+    function showCritFeedback() {
+      playCritSound();
+      showPickupToast('💥 Critical hit!', playCritSound);
+    }
+
     function hitPlayer(id) {
-      const dmg = (playerHasSword && getSelectedHotbarItem() === 'sword') ? 2 : 1;
-      mpEv('phit', { dmg }, id);
-      playHitSound();
+      const hit = rollCrit(heldDamage());
+      mpEv('phit', { dmg: hit.dmg, crit: hit.crit ? 1 : 0 }, id);
       const mesh = mpRemoteMeshes.get(id);
-      if (mesh) mesh.userData.hitFlash = 1;
+      if (mesh) {
+        mesh.userData.hitFlash = 1;
+        mesh.userData.flashCrit = hit.crit;
+      }
+      if (hit.crit) showCritFeedback();
+      else playHitSound();
     }
 
     function onPlayerHit(fromId, d) {
       if (!arenaAnimId) return;
+      const crit = !!d.crit;
       const ap = playerPosById(fromId);
       if (ap && playerInvuln <= 0) {
         const dx = arenaCamera.position.x - ap.x;
         const dz = arenaCamera.position.z - ap.z;
         const len = Math.max(Math.hypot(dx, dz), 0.001);
-        arenaCamera.position.x += (dx / len) * 1.2;
-        arenaCamera.position.z += (dz / len) * 1.2;
-        arenaVelocityY = 3;
+        const speed = crit ? KNOCKBACK_CRIT_SPEED : KNOCKBACK_SPEED;
+        knockVX = (dx / len) * speed;
+        knockVZ = (dz / len) * speed;
+        arenaVelocityY = crit ? 4.5 : 3;
         arenaOnGround = false;
       }
-      damagePlayer(Math.max(0, Math.min(4, Number(d.dmg) || 1)), null);
+      pvpKillCredit = { id: fromId, time: Date.now() };
+      damagePlayer(Math.max(0, Math.min(8, Number(d.dmg) || 1)), null, true);
+    }
+
+    function creditPvpKill() {
+      if (pvpKillCredit && Date.now() - pvpKillCredit.time < 6000) {
+        mpEv('pkill', {}, pvpKillCredit.id);
+      }
+      pvpKillCredit = null;
     }
 
     function onArenaMouseDown(e) {
@@ -6317,38 +6520,38 @@
     function onArenaKeyDown(e) {
       if (!document.getElementById('screen-arena').classList.contains('active')) return;
 
-      if (e.code === 'KeyG') {
+      const action = bindActionForCode(e.code);
+      if (action === 'shop') {
         if (shopOpen) closeShop();
         else if (nearShop) openShop();
         return;
       }
       if (shopOpen) return;
 
-      switch (e.code) {
-        case 'KeyW': arenaKeys.w = true; break;
-        case 'KeyA': arenaKeys.a = true; break;
-        case 'KeyS': arenaKeys.s = true; break;
-        case 'KeyD': arenaKeys.d = true; break;
-        case 'Space':
+      switch (action) {
+        case 'forward': arenaKeys.w = true; break;
+        case 'left': arenaKeys.a = true; break;
+        case 'back': arenaKeys.s = true; break;
+        case 'right': arenaKeys.d = true; break;
+        case 'jump':
           e.preventDefault();
           if (arenaOnGround) {
             arenaVelocityY = JUMP_SPEED;
             arenaOnGround = false;
           }
           break;
-        case 'ShiftLeft':
-        case 'ShiftRight':
+        case 'dismount':
           if (ridingDino) dismountDino();
           break;
       }
     }
 
     function onArenaKeyUp(e) {
-      switch (e.code) {
-        case 'KeyW': arenaKeys.w = false; break;
-        case 'KeyA': arenaKeys.a = false; break;
-        case 'KeyS': arenaKeys.s = false; break;
-        case 'KeyD': arenaKeys.d = false; break;
+      switch (bindActionForCode(e.code)) {
+        case 'forward': arenaKeys.w = false; break;
+        case 'left': arenaKeys.a = false; break;
+        case 'back': arenaKeys.s = false; break;
+        case 'right': arenaKeys.d = false; break;
       }
     }
 
@@ -6374,6 +6577,8 @@
         const mountSpeed = ridingDino.userData.type === 'raptor' ? MOVE_SPEED * MOUNT_SPEED_MULT : MOVE_SPEED;
         const moveDir = inputDir.clone();
         if (isMoveInput) moveDir.normalize().multiplyScalar(mountSpeed * dt);
+        knockVX = 0;
+        knockVZ = 0;
 
         let nx = ridingDino.position.x + moveDir.x;
         let nz = ridingDino.position.z + moveDir.z;
@@ -6426,6 +6631,11 @@
       } else {
         const moveDir = inputDir.clone();
         if (isMoveInput) moveDir.normalize().multiplyScalar(MOVE_SPEED * dt);
+        moveDir.x += knockVX * dt;
+        moveDir.z += knockVZ * dt;
+        const knockDecay = Math.exp(-dt * 8);
+        knockVX *= knockDecay;
+        knockVZ *= knockDecay;
 
         const combinedColliders = arenaColliders.concat(arenaDinoColliders);
         const resolved = resolveCollisions(arenaCamera.position.x + moveDir.x, arenaCamera.position.z + moveDir.z, combinedColliders);
@@ -6612,6 +6822,7 @@
     buildAvatarPicker();
     setSensitivityPct(sensitivityPct);
     setFov(gameSettings.fov);
+    renderKeybinds();
     setParticlePct(gameSettings.particlePct);
     setPickupScalePct(gameSettings.pickupScalePct);
     document.querySelectorAll('.hitbox-toggle-input').forEach((el) => { el.checked = gameSettings.hitboxes; });
