@@ -1,4 +1,6 @@
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
 const { WebSocketServer } = require('ws');
 
 const PORT = process.env.PORT || 8080;
@@ -31,8 +33,28 @@ let hostId = null;
 const HOST_ONLY_KINDS = new Set(['dsnap', 'wsnap', 'dmg', 'dkill', 'tamed', 'mountdead']);
 const ALLOWED_KINDS = new Set([
   'dsnap', 'wsnap', 'reqsnap', 'dhit', 'feed', 'mount', 'dismount', 'stay', 'ride',
-  'dmg', 'dkill', 'tamed', 'mountdead', 'mdmg', 'thit', 'sgc', 'lplace', 'lhit'
+  'dmg', 'dkill', 'tamed', 'mountdead', 'mdmg', 'thit', 'sgc', 'lplace', 'lhit', 'phit'
 ]);
+const PVP_RANGE = 8;
+const PVP_MIN_INTERVAL_MS = 250;
+
+// Every name that has ever joined, so the lobby can list offline players too.
+// Kept in memory and saved to a file when possible (free hosts may reset the file).
+const REGISTRY_FILE = path.join(__dirname, 'registry.json');
+const registry = new Map();
+try {
+  JSON.parse(fs.readFileSync(REGISTRY_FILE, 'utf8')).forEach((e) => registry.set(e.name.toLowerCase(), e));
+} catch (e) { /* no saved registry yet */ }
+let registrySaveTimer = null;
+function saveRegistrySoon() {
+  clearTimeout(registrySaveTimer);
+  registrySaveTimer = setTimeout(() => {
+    fs.writeFile(REGISTRY_FILE, JSON.stringify(Array.from(registry.values())), () => {});
+  }, 2000);
+}
+function knownList() {
+  return Array.from(registry.values()).map((e) => ({ name: e.name, emoji: e.emoji, color: e.color }));
+}
 const EVENT_RATE_LIMIT = 120; // events per second per player
 
 // The host's browser runs the dino simulation, and browsers freeze hidden or
@@ -105,7 +127,8 @@ wss.on('connection', (ws) => {
     lastChat: 0,
     evWindowStart: 0,
     evCount: 0,
-    visible: true
+    visible: true,
+    lastHit: 0
   };
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
@@ -123,7 +146,9 @@ wss.on('connection', (ws) => {
       player.skin = clean(msg.skin, 20) || 'ranger';
       player.joined = true;
       players.set(player.id, player);
-      send(ws, { t: 'welcome', id: player.id, players: lobbyList(), chat: chatLog, seed: worldSeed, host: hostId });
+      registry.set(player.name.toLowerCase(), { name: player.name, emoji: player.emoji, color: player.color });
+      saveRegistrySoon();
+      send(ws, { t: 'welcome', id: player.id, players: lobbyList(), chat: chatLog, seed: worldSeed, host: hostId, known: knownList() });
       broadcast({ t: 'join', player: publicInfo(player) }, player.id);
       return;
     }
@@ -150,6 +175,13 @@ wss.on('connection', (ws) => {
       if (typeof msg.k !== 'string' || !ALLOWED_KINDS.has(msg.k)) return;
       if (HOST_ONLY_KINDS.has(msg.k) && player.id !== hostId) return;
       const now = Date.now();
+      if (msg.k === 'phit') {
+        const victim = typeof msg.to === 'number' ? players.get(msg.to) : null;
+        if (!victim || victim === player || !victim.inArena || !player.inArena) return;
+        if (Math.hypot(victim.x - player.x, victim.z - player.z) > PVP_RANGE) return;
+        if (now - player.lastHit < PVP_MIN_INTERVAL_MS) return;
+        player.lastHit = now;
+      }
       if (now - player.evWindowStart > 1000) { player.evWindowStart = now; player.evCount = 0; }
       if (++player.evCount > EVENT_RATE_LIMIT) return;
       const out = JSON.stringify({ t: 'ev', from: player.id, k: msg.k, d: msg.d });

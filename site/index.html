@@ -505,6 +505,19 @@
 
     .player-row:hover { background: #101c10; }
 
+    .player-avatar-wrap {
+      position: relative;
+      flex-shrink: 0;
+    }
+
+    .player-row.offline .player-avatar {
+      filter: brightness(0.4) saturate(0.35);
+    }
+
+    .player-row.offline .player-name {
+      color: #4c6150;
+    }
+
     .player-avatar {
       position: relative;
       width: 30px;
@@ -532,6 +545,11 @@
     .player-status-dot.online {
       background: #39ff14;
       box-shadow: 0 0 6px rgba(57,255,20,0.8);
+    }
+
+    .player-status-dot.offline {
+      background: #ff3b3b;
+      box-shadow: 0 0 6px rgba(255,59,59,0.85);
     }
 
     .player-name {
@@ -2115,47 +2133,50 @@
       }
     }
 
+    function playerRowHtml(p) {
+      return `
+        <div class="player-row${p.online ? '' : ' offline'}">
+          <div class="player-avatar-wrap">
+            <div class="player-avatar" style="background:${escapeHtml(p.color)}">${escapeHtml(p.emoji)}</div>
+            <span class="player-status-dot ${p.online ? 'online' : 'offline'}"></span>
+          </div>
+          <div class="player-name${p.isYou ? ' is-you' : ''}">${escapeHtml(p.name)}${p.isYou ? ' (you)' : ''}${p.inArena ? ' 🎮' : ''}</div>
+        </div>
+      `;
+    }
+
     function renderPlayers() {
-      if (mpConnected) {
-        const list = document.getElementById('players-list');
-        const online = Array.from(mpPlayers.values()).sort((a, b) => a.name.localeCompare(b.name));
-        list.innerHTML = online.map((p) => {
-          const isYou = p.id === mpMyId;
-          return `
-            <div class="player-row">
-              <div class="player-avatar" style="background:${escapeHtml(p.color)}">
-                ${escapeHtml(p.emoji)}
-                <span class="player-status-dot online"></span>
-              </div>
-              <div class="player-name${isYou ? ' is-you' : ''}">${escapeHtml(p.name)}${isYou ? ' (you)' : ''}${p.inArena ? ' 🎮' : ''}</div>
-            </div>
-          `;
-        }).join('');
-        return;
-      }
-      const accounts = getAccounts();
-      const players = Object.values(accounts).sort((a, b) => a.username.localeCompare(b.username));
       const list = document.getElementById('players-list');
       const now = Date.now();
+      const rows = new Map();
 
+      // Everyone known on this device (other accounts here), shown offline unless seen recently.
+      Object.values(getAccounts()).forEach((a) => {
+        const online = !mpConnected && !!a.lastSeen && (now - a.lastSeen) < ONLINE_THRESHOLD_MS;
+        rows.set(a.username.toLowerCase(), {
+          name: a.username, emoji: a.avatarEmoji || '🦖', color: a.avatarColor || '#39ff14',
+          online, isYou: a.username.toLowerCase() === currentUsernameKey, inArena: false
+        });
+      });
+      // Everyone the server has ever seen (offline until connected right now).
+      mpKnown.forEach((k) => {
+        const key = k.name.toLowerCase();
+        if (!rows.has(key)) rows.set(key, { name: k.name, emoji: k.emoji, color: k.color, online: false, isYou: false, inArena: false });
+      });
+      // Players connected right now.
+      mpPlayers.forEach((p) => {
+        rows.set(p.name.toLowerCase(), {
+          name: p.name, emoji: p.emoji, color: p.color, online: true, isYou: p.id === mpMyId, inArena: !!p.inArena
+        });
+      });
+
+      const players = Array.from(rows.values()).sort((a, b) =>
+        (b.online - a.online) || a.name.localeCompare(b.name));
       if (!players.length) {
         list.innerHTML = '<div class="players-empty">No players yet.</div>';
         return;
       }
-
-      list.innerHTML = players.map(p => {
-        const online = !!p.lastSeen && (now - p.lastSeen) < ONLINE_THRESHOLD_MS;
-        const isYou = p.username.toLowerCase() === currentUsernameKey;
-        return `
-          <div class="player-row">
-            <div class="player-avatar" style="background:${p.avatarColor || '#39ff14'}">
-              ${p.avatarEmoji || '🦖'}
-              <span class="player-status-dot${online ? ' online' : ''}"></span>
-            </div>
-            <div class="player-name${isYou ? ' is-you' : ''}">${escapeHtml(p.username)}${isYou ? ' (you)' : ''}</div>
-          </div>
-        `;
-      }).join('');
+      list.innerHTML = players.map(playerRowHtml).join('');
     }
 
     function startPresenceLoop() {
@@ -2267,6 +2288,7 @@
     const mpArenaTargets = new Map();
     const mpRemoteMeshes = new Map();
     let mpChat = [];
+    let mpKnown = [];
     let mpWorldSeed = null;
     let mpHostId = null;
     let arenaSeed = null;
@@ -2397,6 +2419,7 @@
         mpConnected = true;
         mpMyId = msg.id;
         mpWorldSeed = msg.seed;
+        mpKnown = msg.known || [];
         mpHostId = msg.host === undefined ? null : msg.host;
         mpPlayers.clear();
         msg.players.forEach((p) => mpPlayers.set(p.id, p));
@@ -2409,6 +2432,9 @@
         if (arenaAnimId) mpSend({ t: 'scene', inArena: true });
       } else if (msg.t === 'join' || msg.t === 'update') {
         mpPlayers.set(msg.player.id, msg.player);
+        if (!mpKnown.some((k) => k.name.toLowerCase() === msg.player.name.toLowerCase())) {
+          mpKnown.push({ name: msg.player.name, emoji: msg.player.emoji, color: msg.player.color });
+        }
         const mesh = mpRemoteMeshes.get(msg.player.id);
         if (mesh) applyRemoteSkin(mesh, msg.player.skin);
         if (!msg.player.inArena) {
@@ -2671,6 +2697,8 @@
           arenaOnGround = false;
         }
         damagePlayer(Number(d.amt) || 1, attacker);
+      } else if (k === 'phit') {
+        onPlayerHit(from, d);
       } else if (k === 'dkill') {
         awardFoodDrop(d.ty);
       } else if (k === 'tamed') {
@@ -2736,6 +2764,8 @@
       tag.position.set(0, 2.65, 0);
       group.add(tag);
       group.userData.remoteSleeveMat = sleeveMat;
+      group.userData.flashMats = [skinMat, sleeveMat, group.userData.pantsMat, group.userData.bootMat];
+      group.userData.hitFlash = 0;
       applyRemoteSkin(group, info.skin);
       return group;
     }
@@ -2777,6 +2807,10 @@
           mesh.rotation.y = t.yaw;
           arenaScene.add(mesh);
           mpRemoteMeshes.set(id, mesh);
+        }
+        if (mesh.userData.hitFlash > 0) {
+          mesh.userData.hitFlash = Math.max(0, mesh.userData.hitFlash - dt * 3);
+          mesh.userData.flashMats.forEach((m) => m.emissive.setRGB(mesh.userData.hitFlash, 0, 0));
         }
         const k = Math.min(dt * 10, 1);
         mesh.position.x += (t.x - mesh.position.x) * k;
@@ -5929,6 +5963,15 @@
         }
       });
 
+      mpRemoteMeshes.forEach((mesh, id) => {
+        const tt = rayHit2D(dirX, dirZ, mesh.position.x, mesh.position.z, 0.55 + ATTACK_HIT_FORGIVENESS, ATTACK_RANGE);
+        if (tt !== null && tt < bestT) {
+          bestT = tt;
+          best = id;
+          bestKind = 'player';
+        }
+      });
+
       return { target: best, kind: bestKind };
     }
 
@@ -6128,6 +6171,30 @@
       else if (kind === 'tree') { hitTree(target); playTreeThumpSound(); }
       else if (kind === 'seagrass') hitSeagrass(target);
       else if (kind === 'logpile') hitLogPile(target);
+      else if (kind === 'player') hitPlayer(target);
+    }
+
+    function hitPlayer(id) {
+      const dmg = (playerHasSword && getSelectedHotbarItem() === 'sword') ? 2 : 1;
+      mpEv('phit', { dmg }, id);
+      playHitSound();
+      const mesh = mpRemoteMeshes.get(id);
+      if (mesh) mesh.userData.hitFlash = 1;
+    }
+
+    function onPlayerHit(fromId, d) {
+      if (!arenaAnimId) return;
+      const ap = playerPosById(fromId);
+      if (ap && playerInvuln <= 0) {
+        const dx = arenaCamera.position.x - ap.x;
+        const dz = arenaCamera.position.z - ap.z;
+        const len = Math.max(Math.hypot(dx, dz), 0.001);
+        arenaCamera.position.x += (dx / len) * 1.2;
+        arenaCamera.position.z += (dz / len) * 1.2;
+        arenaVelocityY = 3;
+        arenaOnGround = false;
+      }
+      damagePlayer(Math.max(0, Math.min(4, Number(d.dmg) || 1)), null);
     }
 
     function onArenaMouseDown(e) {
