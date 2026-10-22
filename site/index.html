@@ -5458,6 +5458,74 @@
       });
     }
 
+    // Small gold star-shaped sparks (drawn, not emoji) that burst out on a critical hit.
+    const arenaCritStars = [];
+    let critStarTexture = null;
+
+    function getCritStarTexture() {
+      if (critStarTexture) return critStarTexture;
+      const size = 64;
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = size;
+      const ctx = canvas.getContext('2d');
+      ctx.beginPath();
+      for (let i = 0; i < 10; i++) {
+        const r = i % 2 === 0 ? 29 : 12;
+        const a = -Math.PI / 2 + (i * Math.PI) / 5;
+        const px = size / 2 + Math.cos(a) * r;
+        const py = size / 2 + Math.sin(a) * r;
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fillStyle = '#ffd23f';
+      ctx.fill();
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = '#fff6c2';
+      ctx.stroke();
+      critStarTexture = new THREE.CanvasTexture(canvas);
+      return critStarTexture;
+    }
+
+    function spawnCritStars(x, y, z) {
+      if (!arenaScene) return;
+      const count = 9;
+      for (let i = 0; i < count; i++) {
+        const mat = new THREE.SpriteMaterial({ map: getCritStarTexture(), transparent: true, depthTest: false });
+        const sprite = new THREE.Sprite(mat);
+        const size = 0.16 + Math.random() * 0.12;
+        sprite.scale.set(size, size, 1);
+        sprite.position.set(x, y, z);
+        sprite.renderOrder = 11;
+        arenaScene.add(sprite);
+        const angle = (i / count) * Math.PI * 2 + Math.random() * 0.5;
+        const speed = 1.6 + Math.random() * 1.4;
+        arenaCritStars.push({
+          sprite,
+          vel: new THREE.Vector3(Math.cos(angle) * speed, 1.2 + Math.random() * 1.4, Math.sin(angle) * speed),
+          spin: (Math.random() - 0.5) * 8,
+          life: 0,
+          maxLife: 0.55 + Math.random() * 0.25
+        });
+      }
+    }
+
+    function updateCritStars(dt) {
+      for (let i = arenaCritStars.length - 1; i >= 0; i--) {
+        const s = arenaCritStars[i];
+        s.life += dt;
+        if (s.life >= s.maxLife) {
+          arenaScene.remove(s.sprite);
+          s.sprite.material.dispose();
+          arenaCritStars.splice(i, 1);
+          continue;
+        }
+        s.vel.y -= dt * 4;
+        s.sprite.position.addScaledVector(s.vel, dt);
+        s.sprite.material.rotation += s.spin * dt;
+        s.sprite.material.opacity = 1 - s.life / s.maxLife;
+      }
+    }
+
     function updateWalkParticles(dt) {
       for (let i = arenaWalkParticles.length - 1; i >= 0; i--) {
         const p = arenaWalkParticles[i];
@@ -6341,7 +6409,7 @@
         const hit = rollCrit(heldDamage());
         hitDino(target, hit.dmg);
         playHitSound();
-        if (hit.crit) showCritFeedback();
+        if (hit.crit) showCritFeedback(target.position.x, terrainHeight(target.position.x, target.position.z) + 1.4, target.position.z);
       }
       else if (kind === 'tree') { hitTree(target); playTreeThumpSound(); }
       else if (kind === 'seagrass') hitSeagrass(target);
@@ -6358,9 +6426,9 @@
       return { dmg: crit ? base * CRIT_MULT : base, crit };
     }
 
-    function showCritFeedback() {
-      playCritSound();
-      showPickupToast('💥 Critical hit!', playCritSound);
+    function showCritFeedback(x, y, z) {
+      spawnCritStars(x, y, z);
+      showPickupToast('CRITICAL HIT!', playCritSound);
     }
 
     function hitPlayer(id) {
@@ -6371,7 +6439,8 @@
         mesh.userData.hitFlash = 1;
         mesh.userData.flashCrit = hit.crit;
       }
-      if (hit.crit) showCritFeedback();
+      if (hit.crit && mesh) showCritFeedback(mesh.position.x, mesh.position.y + 1.5, mesh.position.z);
+      else if (hit.crit) showCritFeedback(arenaCamera.position.x, arenaCamera.position.y, arenaCamera.position.z);
       else playHitSound();
     }
 
@@ -6388,6 +6457,14 @@
         knockVZ = (dz / len) * speed;
         arenaVelocityY = crit ? 4.5 : 3;
         arenaOnGround = false;
+      }
+      if (crit) {
+        spawnCritStars(
+          arenaCamera.position.x - Math.sin(arenaYaw) * 1.3,
+          arenaCamera.position.y - 0.2,
+          arenaCamera.position.z - Math.cos(arenaYaw) * 1.3
+        );
+        playCritSound();
       }
       pvpKillCredit = { id: fromId, time: Date.now() };
       damagePlayer(Math.max(0, Math.min(8, Number(d.dmg) || 1)), null, true);
@@ -6677,6 +6754,7 @@
         walkParticleTimer = 0;
       }
       updateWalkParticles(dt);
+      updateCritStars(dt);
       updateBreath(dt);
       updateHitboxDebug(dt);
       updateRemotePlayers(dt, elapsed);
